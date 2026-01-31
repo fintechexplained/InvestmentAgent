@@ -63,3 +63,5 @@ docs/SYSTEM_FLOW_DOCUMENTATION.md
 docs/TEST_RESULTS.md
 docs/TESTING_ISSUE_AND_SOLUTIONS.md
 .claude/settings.local.json
+docs/ingest.gif
+docs/query.gif
