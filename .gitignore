@@ -1,0 +1,65 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Environment
+.env
+
+# Logs
+*.log
+
+# ChromaDB
+chroma_db/
+
+# Data (optional - uncomment if you don't want to track data files)
+# data/
+
+# OS
+.DS_Store
+Thumbs.db
+docs/article.md
+docs/FINAL_STATUS.md
+docs/planning.md
+docs/PROJECT_SUMMARY.md
+docs/QUICK_START.md
+docs/SETUP_INSTRUCTIONS.md
+docs/SYSTEM_FLOW_DOCUMENTATION.md
+docs/TEST_RESULTS.md
+docs/TESTING_ISSUE_AND_SOLUTIONS.md
+.claude/settings.local.json
