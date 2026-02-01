@@ -199,22 +199,12 @@ class InvestmentUI:
                 """)
             return
 
-        # Query type selector
-        col1, col2 = st.columns([3, 1])
-
-        with col1:
-            user_question = st.text_area(
-                "Your Question",
-                placeholder="e.g., What was RandomCompany's revenue in the last quarter?",
-                height=100,
-            )
-
-        with col2:
-            query_type = st.selectbox(
-                "Query Type",
-                ["Fundamentals", "Comparison", "Trends"],
-                help="Hint for the type of analysis",
-            )
+        # Query input
+        user_question = st.text_area(
+            "Your Question",
+            placeholder="e.g., What was RandomCompany's revenue in the last quarter?",
+            height=100,
+        )
 
         if st.button("Ask", type="primary", use_container_width=True):
             if not user_question.strip():

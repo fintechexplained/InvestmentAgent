@@ -8,8 +8,10 @@ A sophisticated AI-powered investment analysis system that processes earnings ca
 
 - **Multi-Modal Processing**: Text transcripts, audio files, and chart images
 - **Vector-Based Search**: FAISS for efficient semantic similarity search
-- **AI-Powered Analysis**: Claude 3.5 Sonnet for intelligent Q&A
-- **Vision Capabilities**: Claude Haiku for chart analysis
+- **AI-Powered Analysis**: Claude 3 Haiku with Pydantic AI for intelligent Q&A
+- **Web Search Integration**: DuckDuckGo search for real-time information
+- **Dual Search Strategy**: RAG database search with web search fallback
+- **Vision Capabilities**: Claude for chart analysis
 - **Interactive UI**: Streamlit-based web interface
 - **Comprehensive Logging**: Detailed logging throughout the pipeline
 - **Extensible Architecture**: Plugin-based processor registry
@@ -113,11 +115,19 @@ pytest tests/test_processors/ -v
 
 ## Example Questions
 
+### Questions Using RAG Database (for ingested companies):
 - "What was CompanyA's revenue in Q4 2024?"
 - "Compare revenue growth between CompanyA and CompanyB"
 - "How has CompanyA's stock price trended over the last quarter?"
 - "What were the key topics discussed in CompanyB's earnings call?"
 - "Summarize the main financial metrics from the charts"
+
+### Questions Using Web Search (for any company):
+- "What was Apple's revenue in the last quarter?"
+- "What is Tesla's current stock price?"
+- "What are Microsoft's latest earnings results?"
+- "What happened with NVIDIA stock this week?"
+- "What is Amazon's market capitalization?"
 
 ## Architecture
 
@@ -136,8 +146,10 @@ The system follows a modular architecture:
   - Persistent storage support
   - Metadata management
 
-- **Agent** ([src/agent/](src/agent/)): Claude-powered Q&A with RAG
+- **Agent** ([src/agent/](src/agent/)): Pydantic AI-powered Q&A with RAG + Web Search
+  - Automatic tool selection (RAG database or web search)
   - Context retrieval from vector store
+  - DuckDuckGo web search fallback
   - Structured prompts for accurate analysis
   - Citation of sources
 
@@ -162,9 +174,9 @@ User Question → Retrieval → Context → Claude → Answer
 ## API Costs (Approximate)
 
 - **Whisper API**: ~$0.006 per minute of audio
-- **Claude 3.5 Sonnet**: ~$3-15 per million tokens
-- **Claude 3 Haiku**: ~$0.25-1.25 per million tokens
+- **Claude 3 Haiku**: ~$0.25-1.25 per million tokens (used for Q&A)
 - **OpenAI Embeddings**: ~$0.00013 per 1K tokens
+- **DuckDuckGo Search**: Free (no API key required)
 
 ## Project Structure
 
@@ -228,9 +240,11 @@ poetry run mypy src/
 
 ## Built With
 
-- **[Anthropic Claude](https://www.anthropic.com/)**: Claude 3.5 Sonnet & Claude 3 Haiku
+- **[Anthropic Claude](https://www.anthropic.com/)**: Claude 3 Haiku for Q&A and analysis
+- **[Pydantic AI](https://ai.pydantic.dev/)**: Agent framework with tool calling
 - **[OpenAI](https://openai.com/)**: Whisper API for transcription, embeddings
 - **[FAISS](https://github.com/facebookresearch/faiss)**: Efficient vector similarity search
+- **[DuckDuckGo Search (ddgs)](https://pypi.org/project/ddgs/)**: Web search capabilities
 - **[Streamlit](https://streamlit.io/)**: Interactive web UI
 - **[Pydantic](https://docs.pydantic.dev/)**: Data validation and settings management
 
