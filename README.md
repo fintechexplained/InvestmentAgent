@@ -1,6 +1,6 @@
 # Multi-Modal Investment Agent
 
-A sophisticated AI-powered investment analysis system that processes earnings call transcripts, audio recordings, and stock price charts using Retrieval-Augmented Generation (RAG).
+An AI-powered investment analysis system that processes earnings call transcripts, audio recordings, and stock price charts using Retrieval-Augmented Generation (RAG).
 
 **Disclaimer:** This code is written for educational purposes only; readers should seek guidance from qualified professional advisors before making any investment decisions. Do not use it in a production environment.
 
@@ -116,10 +116,10 @@ pytest tests/test_processors/ -v
 ## Example Questions
 
 ### Questions Using RAG Database (for ingested companies):
-- "What was CompanyA's revenue in Q4 2024?"
-- "Compare revenue growth between CompanyA and CompanyB"
-- "How has CompanyA's stock price trended over the last quarter?"
-- "What were the key topics discussed in CompanyB's earnings call?"
+- "What was RandomCompany's revenue in Q4 2024?"
+- "Compare revenue growth between RandomCompany and SampleCompany"
+- "How has RandomCompany's stock price trended over the last quarter?"
+- "What were the key topics discussed in RandomCompany's earnings call?"
 - "Summarize the main financial metrics from the charts"
 
 ### Questions Using Web Search (for any company):
