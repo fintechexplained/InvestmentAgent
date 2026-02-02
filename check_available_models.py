@@ -11,7 +11,7 @@ async def test_model(model_name: str) -> bool:
         agent = Agent(model=model_name)
         result = await agent.run("Say 'ok'")
         print(f"[SUCCESS] {model_name}")
-        print(f"  Response: {result.data}")
+        print(f"  Response: {result.output}")
         return True
     except Exception as e:
         error_msg = str(e)

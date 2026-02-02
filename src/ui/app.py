@@ -174,7 +174,8 @@ class InvestmentUI:
             if st.checkbox("Confirm clear all data"):
                 st.session_state.vector_store.clear()
                 st.session_state.chat_history = []
-                st.success("Data cleared!")
+                st.session_state.agent.clear_history()
+                st.success("Data and conversation cleared!")
                 st.rerun()
 
     def render_query_interface(self):
@@ -198,6 +199,22 @@ class InvestmentUI:
                 Then restart the application.
                 """)
             return
+
+        # Conversation status
+        history_length = st.session_state.agent.get_history_length()
+        col1, col2 = st.columns([3, 1])
+
+        with col1:
+            if history_length > 0:
+                st.info(f"💬 Conversation active ({history_length} messages). The agent remembers your previous questions.")
+            else:
+                st.info("💬 Start a new conversation. Ask follow-up questions and the agent will remember the context!")
+
+        with col2:
+            if st.button("Clear Conversation", use_container_width=True):
+                st.session_state.agent.clear_history()
+                st.success("Conversation cleared!")
+                st.rerun()
 
         # Query input
         user_question = st.text_area(
@@ -246,6 +263,11 @@ class InvestmentUI:
             - How has RandomCompany's revenue trended over time?
             - Is RandomCompany's stock price rising or falling?
             - What's the trend in operating margins?
+
+            **Follow-up Questions (using conversation memory):**
+            - After asking about a company: "What about their expenses?"
+            - After a comparison: "Which one is more profitable?"
+            - After trend analysis: "What might be causing this trend?"
             """)
 
     def render_chat_history(self):
@@ -281,18 +303,30 @@ class InvestmentUI:
         - **Multi-Modal Processing:** Handles text, audio, and images
         - **Vector Search:** Fast semantic search across all data
         - **AI-Powered Analysis:** Uses Claude for deep insights
+        - **Conversational Interface:** Ask follow-up questions with full context memory
         - **Source Citations:** All answers include source references
+        - **Dual Search Strategy:** RAG database + web search fallback
 
         #### Architecture
         - **Processors:** Modality-specific processors for each data type
         - **Vector Store:** FAISS for fast local semantic search
-        - **LLM:** Claude 3.5 Sonnet for analysis
+        - **Agent Framework:** Pydantic AI with message history for conversations
+        - **LLM:** Claude 3 Haiku for analysis
         - **Embeddings:** OpenAI embeddings for search
+        - **Web Search:** DuckDuckGo for real-time information
 
         #### How to Use
         1. **Ingest Data:** Load company data from the sidebar
         2. **Ask Questions:** Query the data using natural language
-        3. **Get Insights:** Receive AI-powered analysis with sources
+        3. **Follow Up:** Ask related questions - the agent remembers context
+        4. **Get Insights:** Receive AI-powered analysis with sources
+
+        #### Conversation Memory
+        The agent maintains conversation history, allowing you to:
+        - Ask follow-up questions without repeating context
+        - Reference previous answers ("What about their expenses?")
+        - Build complex analysis through iterative questions
+        - Clear the conversation to start fresh anytime
 
         #### Data Format
         Place data in folders by company name:

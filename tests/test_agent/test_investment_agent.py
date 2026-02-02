@@ -263,3 +263,144 @@ class TestInvestmentAgent:
         # We can verify this indirectly by checking the agent has the expected attributes
         assert hasattr(agent, "_rag_search")
         assert hasattr(agent, "_web_search")
+
+
+class TestConversationHistory:
+    """Test conversation history functionality."""
+
+    def test_initial_history_is_empty(self, mock_vector_store):
+        """Test that message history starts empty."""
+        agent = InvestmentAgent(mock_vector_store)
+        assert agent.get_history_length() == 0
+        assert agent.message_history == []
+
+    def test_clear_history(self, mock_vector_store):
+        """Test clearing conversation history."""
+        agent = InvestmentAgent(mock_vector_store)
+
+        # Add some mock messages
+        agent.message_history = [Mock(), Mock(), Mock()]
+        assert agent.get_history_length() == 3
+
+        # Clear history
+        agent.clear_history()
+        assert agent.get_history_length() == 0
+        assert agent.message_history == []
+
+    @pytest.mark.asyncio
+    async def test_message_history_updates_after_query(self, mock_vector_store):
+        """Test that message history is updated after a query."""
+        agent = InvestmentAgent(mock_vector_store)
+
+        # Mock the agent.run method to return a result with messages
+        mock_result = Mock()
+        mock_result.output = "Test answer"
+        mock_result.all_messages = Mock(return_value=[Mock(), Mock()])
+
+        with patch.object(agent.agent, 'run', new_callable=AsyncMock) as mock_run:
+            mock_run.return_value = mock_result
+
+            initial_length = agent.get_history_length()
+            assert initial_length == 0
+
+            # Run a query
+            answer = await agent.answer_query("What is the revenue?")
+
+            # Check that history was updated
+            assert agent.get_history_length() == 2
+            assert answer == "Test answer"
+
+    @pytest.mark.asyncio
+    async def test_message_history_passed_to_agent(self, mock_vector_store):
+        """Test that message history is passed to subsequent queries."""
+        agent = InvestmentAgent(mock_vector_store)
+
+        # Mock the agent.run method
+        mock_result = Mock()
+        mock_result.output = "First answer"
+        mock_result.all_messages = Mock(return_value=[Mock()])
+
+        with patch.object(agent.agent, 'run', new_callable=AsyncMock) as mock_run:
+            mock_run.return_value = mock_result
+
+            # First query
+            await agent.answer_query("First question")
+
+            # Verify run was called with empty history first time
+            assert mock_run.call_count == 1
+            first_call_kwargs = mock_run.call_args[1]
+            assert first_call_kwargs['message_history'] == []
+
+            # Second query
+            mock_result.output = "Second answer"
+            await agent.answer_query("Second question")
+
+            # Verify run was called with message history second time
+            assert mock_run.call_count == 2
+            second_call_kwargs = mock_run.call_args[1]
+            assert len(second_call_kwargs['message_history']) > 0
+
+    @pytest.mark.asyncio
+    async def test_history_persists_across_queries(self, mock_vector_store):
+        """Test that conversation history persists across multiple queries."""
+        agent = InvestmentAgent(mock_vector_store)
+
+        # Create mock results that build up history
+        def create_mock_result(output, num_messages):
+            result = Mock()
+            result.output = output
+            result.all_messages = Mock(return_value=[Mock() for _ in range(num_messages)])
+            return result
+
+        with patch.object(agent.agent, 'run', new_callable=AsyncMock) as mock_run:
+            # First query - 2 messages (user + assistant)
+            mock_run.return_value = create_mock_result("Answer 1", 2)
+            await agent.answer_query("Question 1")
+            assert agent.get_history_length() == 2
+
+            # Second query - 4 messages (previous 2 + new user + assistant)
+            mock_run.return_value = create_mock_result("Answer 2", 4)
+            await agent.answer_query("Question 2")
+            assert agent.get_history_length() == 4
+
+            # Third query - 6 messages
+            mock_run.return_value = create_mock_result("Answer 3", 6)
+            await agent.answer_query("Question 3")
+            assert agent.get_history_length() == 6
+
+    @pytest.mark.asyncio
+    async def test_clear_resets_conversation_context(self, mock_vector_store):
+        """Test that clearing history allows starting a fresh conversation."""
+        agent = InvestmentAgent(mock_vector_store)
+
+        mock_result = Mock()
+        mock_result.output = "Answer"
+        mock_result.all_messages = Mock(return_value=[Mock(), Mock()])
+
+        with patch.object(agent.agent, 'run', new_callable=AsyncMock) as mock_run:
+            mock_run.return_value = mock_result
+
+            # Build up some history
+            await agent.answer_query("First question")
+            await agent.answer_query("Second question")
+            assert agent.get_history_length() > 0
+
+            # Clear history
+            agent.clear_history()
+            assert agent.get_history_length() == 0
+
+            # Next query should start fresh
+            await agent.answer_query("New question after clear")
+
+            # Verify the last call had empty history
+            last_call_kwargs = mock_run.call_args[1]
+            assert last_call_kwargs['message_history'] == []
+
+    def test_agent_has_conversation_methods(self, mock_vector_store):
+        """Test that agent has all conversation-related methods."""
+        agent = InvestmentAgent(mock_vector_store)
+
+        assert hasattr(agent, 'message_history')
+        assert hasattr(agent, 'answer_query')
+        assert hasattr(agent, 'clear_history')
+        assert hasattr(agent, 'get_history_length')

@@ -3,6 +3,7 @@
 import logging
 from typing import List, Dict, Any
 from pydantic_ai import Agent, RunContext
+from pydantic_ai.messages import ModelMessage
 from ddgs import DDGS
 from ..storage.vector_store import VectorStoreManager
 from pathlib import Path
@@ -20,6 +21,7 @@ class InvestmentAgent:
             vector_store: Vector store manager
         """
         self.vector_store = vector_store
+        self.message_history: List[ModelMessage] = []
 
         # Create pydantic-ai agent
         # Note: Using claude-3-haiku (fastest, most economical model available on this account)
@@ -34,7 +36,7 @@ class InvestmentAgent:
         self.agent.tool(self._rag_search)
         self.agent.tool(self._web_search)
 
-        logger.info("Initialized InvestmentAgent with pydantic-ai")
+        logger.info("Initialized InvestmentAgent with pydantic-ai and message history")
 
     def _get_system_prompt(self) -> str:
         """Get system prompt for the agent."""
@@ -150,6 +152,9 @@ Always maintain objectivity and avoid speculation beyond what the data shows."""
     async def answer_query(self, user_question: str) -> str:
         """Answer user question using the agent with RAG and web search tools.
 
+        This method maintains conversation history, allowing follow-up questions
+        that reference previous context.
+
         Args:
             user_question: The user's question
 
@@ -159,16 +164,36 @@ Always maintain objectivity and avoid speculation beyond what the data shows."""
         logger.info(f"Processing query: {user_question}")
 
         try:
-            # Run the agent with the question
+            # Run the agent with the question and message history
             result = await self.agent.run(
                 user_question,
-                deps=self.vector_store
+                deps=self.vector_store,
+                message_history=self.message_history
             )
 
+            # Update message history with the new conversation
+            self.message_history = result.all_messages()
+
             answer = result.output
-            logger.info("Successfully generated answer")
+            logger.info(f"Successfully generated answer (history size: {len(self.message_history)})")
             return answer
 
         except Exception as e:
             logger.error(f"Error answering query: {e}")
             return f"I encountered an error while processing your question: {str(e)}"
+
+    def clear_history(self) -> None:
+        """Clear the conversation history.
+
+        Use this to start a fresh conversation without context from previous queries.
+        """
+        self.message_history = []
+        logger.info("Cleared conversation history")
+
+    def get_history_length(self) -> int:
+        """Get the number of messages in the conversation history.
+
+        Returns:
+            Number of messages in history
+        """
+        return len(self.message_history)
