@@ -5,7 +5,7 @@ import hashlib
 import time
 import re
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from .base_processor import BaseModalityProcessor, ProcessedChunk, ProcessingResult
 
 logger = logging.getLogger(__name__)
@@ -20,6 +20,23 @@ class TranscriptProcessor(BaseModalityProcessor):
     3. Extracts key financial metrics
     4. Generates summaries
     """
+
+    # Matches "First Last: text" including middle initials like "Timothy D. Cook: …"
+    _SPEAKER_RE = re.compile(
+        r"^([A-Z][a-zA-Z]+(?:\s+(?:[A-Z]\.?\s*)?[A-Z][a-zA-Z]+){0,3})\s*:\s*(.*)"
+    )
+    # Matches bare-role speakers like "CEO:", "Operator:", etc.
+    _ROLE_RE = re.compile(
+        r"^(CEO|CFO|COO|CTO|Operator|Moderator|Chairman)\s*:\s*(.*)",
+        re.IGNORECASE,
+    )
+    # Leading words that signal a label/header line rather than a speaker name.
+    _NON_SPEAKER_PREFIXES = frozenset({
+        "key", "financial", "highlights", "overview", "summary",
+        "prepared", "opening", "closing", "management", "discussion",
+        "revenue", "note", "important", "disclaimer", "forward",
+        "safe", "harbor", "total", "net", "gross", "operating",
+    })
 
     def __init__(self, chunk_size: int = 1000, chunk_overlap: int = 200) -> None:
         """Initialize the transcript processor.
@@ -166,18 +183,21 @@ class TranscriptProcessor(BaseModalityProcessor):
 
         if sections:
             # Chunk by sections
-            for i, (section_title, section_content) in enumerate(sections):
+            for i, (section_title, section_content, speaker) in enumerate(sections):
                 chunk_id = self._generate_chunk_id(
-                    f"{company_name}_{file_path.name}_{section_title}_{i}"
+                    f"{company_name}_{file_path.name}_{section_title}_{speaker}_{i}"
                 )
+                metadata: Dict[str, Any] = {
+                    "section": section_title,
+                    "section_index": i,
+                    "char_count": len(section_content),
+                }
+                if speaker:
+                    metadata["speaker"] = speaker
                 chunks.append(
                     ProcessedChunk(
                         content=section_content,
-                        metadata={
-                            "section": section_title,
-                            "section_index": i,
-                            "char_count": len(section_content),
-                        },
+                        metadata=metadata,
                         chunk_id=chunk_id,
                         company_name=company_name,
                         source_file=str(file_path),
@@ -191,39 +211,45 @@ class TranscriptProcessor(BaseModalityProcessor):
         logger.debug(f"Created {len(chunks)} chunks from {file_path.name}")
         return chunks
 
-    def _identify_sections(self, content: str) -> List[tuple[str, str]]:
-        """Identify sections in the transcript.
+    def _identify_sections(self, content: str) -> List[tuple[str, str, str]]:
+        """Identify sections in the transcript, including speaker detection.
+
+        Section headers (e.g. "Q&A Session", "Prepared Remarks") delimit major
+        blocks.  Q&A sections are further split into individual speaker turns so
+        that each chunk carries its own speaker metadata.  Non-Q&A sections record
+        the first detected speaker as the primary speaker for that section.
 
         Args:
             content: Text content
 
         Returns:
-            List of (section_title, section_content) tuples
+            List of (section_title, section_content, speaker) tuples.
+            Speaker is an empty string when no speaker could be detected.
         """
-        sections = []
-
-        # Common section patterns in earnings transcripts
-        patterns = [
+        # Section-header patterns.  Role labels like "CEO:" / "CFO:" are now
+        # handled as speaker turns, not section boundaries.
+        header_patterns = [
             r"(?i)(MANAGEMENT\s+DISCUSSION|PREPARED\s+REMARKS|OPENING\s+REMARKS)",
-            r"(?i)(Q&A\s+SESSION|QUESTIONS?\s+AND\s+ANSWERS?)",
+            r"(?i)(Q&A\s+SESSION|QUESTIONS?\s+AND\s+ANSWERS?|Q\s*&\s*A)",
             r"(?i)(CLOSING\s+REMARKS|CONCLUSION)",
-            r"(?i)(CEO:?|CFO:?|ANALYST\s*\d*:?)",
+            r"(?i)(FINANCIAL\s+HIGHLIGHTS|KEY\s+(?:ACHIEVEMENTS|HIGHLIGHTS))",
         ]
 
-        # Try to split by clear section headers
+        # --- First pass: split into raw sections by header lines ----------
         lines = content.split("\n")
         current_section = "Introduction"
-        current_content = []
+        current_content: List[str] = []
+        raw_sections: List[tuple[str, str]] = []
 
         for line in lines:
-            # Check if line is a section header
             is_header = False
-            for pattern in patterns:
+            for pattern in header_patterns:
                 if re.match(pattern, line.strip()):
-                    # Save previous section
                     if current_content:
-                        sections.append((current_section, "\n".join(current_content)))
-                    current_section = line.strip()
+                        raw_sections.append(
+                            (current_section, "\n".join(current_content))
+                        )
+                    current_section = line.strip().rstrip(":")
                     current_content = []
                     is_header = True
                     break
@@ -231,15 +257,129 @@ class TranscriptProcessor(BaseModalityProcessor):
             if not is_header:
                 current_content.append(line)
 
-        # Add the last section
         if current_content:
-            sections.append((current_section, "\n".join(current_content)))
+            raw_sections.append((current_section, "\n".join(current_content)))
 
-        # If we only found one section, return empty (will fallback to size-based chunking)
+        # --- Second pass: attach speakers / expand Q&A --------------------
+        sections: List[tuple[str, str, str]] = []
+        for title, section_content in raw_sections:
+            if self._is_qa_section(title):
+                turns = self._parse_speaker_turns(section_content)
+                if turns:
+                    for speaker, text in turns:
+                        sections.append(("Q&A", text, speaker))
+                else:
+                    # No speaker turns detected – keep as a single section
+                    sections.append((title, section_content, ""))
+            else:
+                speaker = self._detect_primary_speaker(section_content)
+                sections.append((title, section_content, speaker))
+
+        # Fall back to size-based chunking when only a single section is found
         if len(sections) <= 1 and len(content) > self.chunk_size * 2:
             return []
 
         return sections
+
+    # ------------------------------------------------------------------
+    # Speaker / Q&A helpers
+    # ------------------------------------------------------------------
+
+    def _detect_speaker(self, line: str) -> Optional[tuple[str, str]]:
+        """Detect a 'Speaker: text' turn in a single line.
+
+        Matches both full names (e.g. "Timothy D. Cook: …") and bare roles
+        (e.g. "CEO: …", "Operator: …").  Lines whose leading word is in
+        ``_NON_SPEAKER_PREFIXES`` are rejected to avoid false positives on
+        metric or section-header labels.
+
+        Args:
+            line: A single line of transcript text.
+
+        Returns:
+            ``(speaker_name, remaining_text)`` when a speaker is detected.
+            ``remaining_text`` may be empty when the name appears on its own
+            line.  Returns ``None`` otherwise.
+        """
+        stripped = line.strip()
+
+        # Role-only speakers (CEO, CFO, Operator, …)
+        role_match = self._ROLE_RE.match(stripped)
+        if role_match:
+            return role_match.group(1), role_match.group(2).strip()
+
+        # Name-style speakers (e.g. "Timothy D. Cook: …")
+        name_match = self._SPEAKER_RE.match(stripped)
+        if name_match:
+            name = name_match.group(1).strip()
+            # Filter out lines that look like section headers or metric labels
+            if name.split()[0].lower() in self._NON_SPEAKER_PREFIXES:
+                return None
+            return name, name_match.group(2).strip()
+
+        return None
+
+    def _is_qa_section(self, title: str) -> bool:
+        """Return True when *title* looks like a Q&A section header."""
+        return bool(
+            re.match(r"(?i)(Q&A|QUESTIONS?\s+AND\s+ANSWERS?|Q\s*&\s*A)", title.strip())
+        )
+
+    def _detect_primary_speaker(self, content: str) -> str:
+        """Return the first speaker name found in *content*, or empty string."""
+        for line in content.split("\n"):
+            result = self._detect_speaker(line)
+            if result:
+                return result[0]
+        return ""
+
+    def _parse_speaker_turns(self, content: str) -> List[tuple[str, str]]:
+        """Split *content* into ``(speaker, text)`` turns.
+
+        Each new ``Speaker: …`` line starts a fresh turn.  Lines appearing
+        before the first detected speaker (e.g. ad-network watermarks) are
+        silently skipped.  Blank lines within a single speaker's turn are
+        preserved to maintain paragraph boundaries.
+
+        Args:
+            content: Raw text of a transcript section.
+
+        Returns:
+            Ordered list of ``(speaker_name, turn_text)`` pairs.
+        """
+        turns: List[tuple[str, str]] = []
+        current_speaker: Optional[str] = None
+        current_lines: List[str] = []
+
+        for line in content.split("\n"):
+            stripped = line.strip()
+
+            if not stripped:
+                # Preserve blank lines within a turn for paragraph separation
+                if current_lines:
+                    current_lines.append("")
+                continue
+
+            speaker_result = self._detect_speaker(stripped)
+            if speaker_result:
+                # Flush the previous speaker's accumulated text
+                if current_speaker is not None:
+                    text = "\n".join(current_lines).strip()
+                    if text:
+                        turns.append((current_speaker, text))
+                current_speaker, first_text = speaker_result
+                current_lines = [first_text] if first_text else []
+            elif current_speaker is not None:
+                current_lines.append(stripped)
+            # Lines before the first speaker are noise – skip them
+
+        # Flush the final turn
+        if current_speaker is not None:
+            text = "\n".join(current_lines).strip()
+            if text:
+                turns.append((current_speaker, text))
+
+        return turns
 
     def _chunk_by_size(
         self, content: str, file_path: Path, company_name: str
@@ -282,15 +422,19 @@ class TranscriptProcessor(BaseModalityProcessor):
                 chunk_id = self._generate_chunk_id(
                     f"{company_name}_{file_path.name}_chunk_{chunk_index}"
                 )
+                metadata: Dict[str, Any] = {
+                    "chunk_index": chunk_index,
+                    "start_char": start,
+                    "end_char": end,
+                    "char_count": len(chunk_content),
+                }
+                speaker = self._detect_primary_speaker(chunk_content)
+                if speaker:
+                    metadata["speaker"] = speaker
                 chunks.append(
                     ProcessedChunk(
                         content=chunk_content,
-                        metadata={
-                            "chunk_index": chunk_index,
-                            "start_char": start,
-                            "end_char": end,
-                            "char_count": len(chunk_content),
-                        },
+                        metadata=metadata,
                         chunk_id=chunk_id,
                         company_name=company_name,
                         source_file=str(file_path),

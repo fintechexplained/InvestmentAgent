@@ -202,3 +202,191 @@ class TestTranscriptProcessor:
 
         # Check that some logging occurred
         assert len(caplog.records) > 0
+
+
+# ---------------------------------------------------------------------------
+# Q&A section parsing
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def qa_transcript(tmp_path):
+    """Transcript with a realistic multi-speaker Q&A section.
+
+    Layout
+    ------
+    - Prepared Remarks   – single named speaker (Timothy D. Cook)
+    - Q&A Session        – six speaker turns with named analysts, an Operator,
+                           and executive responses.  Includes a noise line
+                           ("freestar") *before* the first speaker, and one of
+                           Timothy's answers spans multiple continuation lines.
+    - Closing Remarks    – single named speaker
+    """
+    transcript = tmp_path / "qa_transcript.txt"
+    transcript.write_text("""\
+Prepared Remarks:
+Timothy D. Cook: Good morning, everyone. We had a fantastic quarter delivering
+strong results across all of our product lines.
+
+Q&A Session:
+freestar
+Suhasini Chandramouli: Thank you, Tim. We ask that you limit yourself to two questions. Operator, may we have the first question, please?
+
+Operator: Certainly.
+
+Amit Daryanani: Thank you. I have two questions. First, can you walk us through
+the memory cost dynamics and how they impact gross margin going forward?
+
+Timothy D. Cook: Sure, Amit. Memory had a minimal impact on Q1 gross margin.
+We do expect it to be a bit more of an impact on Q2 gross margin, and that
+was comprehended in the outlook that we gave earlier.
+
+Amit Daryanani: Thank you. My follow-up is about China. What is driving
+the strength there?
+
+Timothy D. Cook: Greater China was up 38% year on year. It was driven by
+iPhone, where we set an all-time revenue record.
+
+Closing Remarks:
+Timothy D. Cook: Thank you all for joining us today. We appreciate your continued support.
+""")
+    return transcript
+
+
+class TestQASectionParsing:
+    """Q&A section detection, speaker extraction, and turn splitting."""
+
+    @pytest.mark.asyncio
+    async def test_qa_produces_one_chunk_per_speaker_turn(self, qa_transcript):
+        """Each speaker turn in the Q&A becomes its own chunk with section == 'Q&A'."""
+        processor = TranscriptProcessor()
+        result = await processor.process(qa_transcript, "Apple")
+
+        qa_chunks = [c for c in result.chunks if c.metadata["section"] == "Q&A"]
+        # The fixture has exactly six speaker turns in the Q&A section
+        assert len(qa_chunks) == 6
+
+    @pytest.mark.asyncio
+    async def test_qa_every_chunk_has_speaker(self, qa_transcript):
+        """Every Q&A chunk carries a non-empty 'speaker' key in its metadata."""
+        processor = TranscriptProcessor()
+        result = await processor.process(qa_transcript, "Apple")
+
+        qa_chunks = [c for c in result.chunks if c.metadata["section"] == "Q&A"]
+        for chunk in qa_chunks:
+            assert "speaker" in chunk.metadata, (
+                f"chunk missing 'speaker': {chunk.content[:60]!r}"
+            )
+            assert chunk.metadata["speaker"] != ""
+
+    @pytest.mark.asyncio
+    async def test_qa_speaker_order_matches_transcript(self, qa_transcript):
+        """Speakers appear in the exact order they occur in the source text."""
+        processor = TranscriptProcessor()
+        result = await processor.process(qa_transcript, "Apple")
+
+        qa_chunks = [c for c in result.chunks if c.metadata["section"] == "Q&A"]
+        speakers = [c.metadata["speaker"] for c in qa_chunks]
+
+        assert speakers == [
+            "Suhasini Chandramouli",
+            "Operator",
+            "Amit Daryanani",
+            "Timothy D. Cook",
+            "Amit Daryanani",
+            "Timothy D. Cook",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_qa_chunk_text_belongs_to_correct_speaker(self, qa_transcript):
+        """Key phrases appear only in the chunk of the speaker who said them."""
+        processor = TranscriptProcessor()
+        result = await processor.process(qa_transcript, "Apple")
+
+        qa_chunks = [c for c in result.chunks if c.metadata["section"] == "Q&A"]
+
+        # Collect all text per speaker
+        by_speaker: dict[str, list[str]] = {}
+        for chunk in qa_chunks:
+            by_speaker.setdefault(chunk.metadata["speaker"], []).append(chunk.content)
+
+        amit_text     = " ".join(by_speaker["Amit Daryanani"])
+        tim_text      = " ".join(by_speaker["Timothy D. Cook"])
+        operator_text = " ".join(by_speaker["Operator"])
+
+        # Amit asked about memory AND about China
+        assert "memory" in amit_text.lower()
+        assert "china" in amit_text.lower()
+
+        # Tim answered about memory AND about China
+        assert "memory" in tim_text.lower()
+        assert "china" in tim_text.lower()
+
+        # Operator said only "Certainly"
+        assert "certainly" in operator_text.lower()
+
+    @pytest.mark.asyncio
+    async def test_qa_multi_line_turn_stays_as_single_chunk(self, qa_transcript):
+        """A speaker's answer that wraps across continuation lines is one chunk."""
+        processor = TranscriptProcessor()
+        result = await processor.process(qa_transcript, "Apple")
+
+        qa_chunks = [c for c in result.chunks if c.metadata["section"] == "Q&A"]
+        tim_chunks = [
+            c for c in qa_chunks if c.metadata["speaker"] == "Timothy D. Cook"
+        ]
+
+        # The first Timothy chunk is the memory answer; both sentences must be present
+        assert "minimal impact" in tim_chunks[0].content
+        assert "outlook"        in tim_chunks[0].content
+
+    @pytest.mark.asyncio
+    async def test_qa_noise_before_first_speaker_is_skipped(self, qa_transcript):
+        """Noise text that appears before the first Q&A speaker is dropped entirely."""
+        processor = TranscriptProcessor()
+        result = await processor.process(qa_transcript, "Apple")
+
+        qa_chunks   = [c for c in result.chunks if c.metadata["section"] == "Q&A"]
+        all_qa_text = " ".join(c.content for c in qa_chunks)
+
+        assert "freestar" not in all_qa_text
+
+    @pytest.mark.asyncio
+    async def test_non_qa_sections_also_populate_speaker(self, qa_transcript):
+        """Prepared Remarks and Closing Remarks also carry a speaker in metadata."""
+        processor = TranscriptProcessor()
+        result = await processor.process(qa_transcript, "Apple")
+
+        prepared = [c for c in result.chunks if c.metadata["section"] == "Prepared Remarks"]
+        closing  = [c for c in result.chunks if c.metadata["section"] == "Closing Remarks"]
+
+        assert len(prepared) == 1
+        assert prepared[0].metadata.get("speaker") == "Timothy D. Cook"
+
+        assert len(closing) == 1
+        assert closing[0].metadata.get("speaker") == "Timothy D. Cook"
+
+    @pytest.mark.asyncio
+    async def test_qa_role_based_speakers(self, tmp_path):
+        """Q&A parsing also works when speakers are bare roles (CEO:, CFO:, Operator:)."""
+        transcript = tmp_path / "role_qa.txt"
+        transcript.write_text("""\
+Prepared Remarks:
+CEO: Good morning, everyone. Strong quarter across the board.
+
+Q&A Session:
+Operator: Thank you. We will now take questions.
+
+CEO: Thank you, Operator. Happy to take questions.
+
+CFO: And I am here to handle the financial details.
+""")
+        processor = TranscriptProcessor()
+        result = await processor.process(transcript, "RoleCo")
+
+        qa_chunks = [c for c in result.chunks if c.metadata["section"] == "Q&A"]
+        speakers  = [c.metadata["speaker"] for c in qa_chunks]
+
+        assert speakers == ["Operator", "CEO", "CFO"]
+        for chunk in qa_chunks:
+            assert chunk.content.strip() != ""
